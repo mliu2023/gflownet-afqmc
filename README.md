@@ -1,1 +1,1 @@
-# gflownet-ising
+# GFlowNets for sampling paths of the Ising model
