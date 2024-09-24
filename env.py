@@ -9,7 +9,7 @@ class IsingEnvironment():
         self.h = initial_lattice.shape[0]
         self.w = initial_lattice.shape[1]
         self.kb = 1
-        self.temp = 1 # high is 3
+        self.temp = 3 # high is 3
         self.beta = 1 / (self.kb * self.temp)
         self.J = 1
 
@@ -21,7 +21,7 @@ class IsingEnvironment():
 
     def step(self, action):
         new_state = self.state.clone()
-        new_state[action] = 1 - new_state[action]  # flip the spin
+        new_state[action] *= -1  # flip the spin
         new_state[-1] += 1  # increment the time step
         self.state = new_state
         done = self.state[-1] == self.max_steps
@@ -30,7 +30,7 @@ class IsingEnvironment():
     
     def reverse_step(self, action):
         new_state = self.state.clone()
-        new_state[action] = 1 - new_state[action]  # flip the spin
+        new_state[action] *= -1  # flip the spin
         new_state[-1] -= 1  # decrement the time step
         self.state = new_state
         done = self.state[-1] == 0
@@ -48,7 +48,7 @@ class IsingEnvironment():
         Returns:
         - reward: The potential reward associated with the given spin configuration.
         """
-        lattice = 2 * lattice - 1 # convert 1 and 0 to 1 and -1
+        # lattice = 2 * lattice - 1 # convert 1 and 0 to 1 and -1
         # Right neighbor interaction (with periodic boundary)
         right_neighbors = torch.roll(lattice, shifts=-1, dims=1)
         

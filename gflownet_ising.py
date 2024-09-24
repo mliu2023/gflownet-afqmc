@@ -5,6 +5,7 @@ import torch.nn.functional as F
 
 from matplotlib import pyplot as plt
 from tqdm import tqdm
+import os
 
 from env import IsingEnvironment
 from visualize import visualize_trajectory
@@ -20,9 +21,9 @@ from visualize import visualize_trajectory
 # )
 INITIAL_LATTICE = torch.Tensor(
     [
-        [0, 1, 1],
-        [1, 0, 1],
-        [1, 1, 0]
+        [-1, 1, 1],
+        [1, -1, 1],
+        [1, 1, -1]
     ]
 )
 
@@ -239,9 +240,9 @@ class GFNAgent():
         loss = log_ratio ** 2
         return loss
 
-    def train_gflownet(self, num_episodes=40000):
+    def train_gflownet(self, num_episodes=10000):
         optimizer = optim.Adam([
-            {'params': self.model.log_Z, 'lr': 1e-2},
+            {'params': self.model.log_Z, 'lr': 3e-2},
             {'params': self.model.network.parameters(), 'lr': 1e-3},
             {'params': self.model.fwp.parameters(), 'lr': 1e-3},
             {'params': self.model.bwp.parameters(), 'lr': 1e-3},], weight_decay=5e-5)
@@ -275,18 +276,23 @@ if __name__ == "__main__":
     """
     Notes:
 
-    - Works well for shorter trajectory lengths (5)
-    - Struggles with longer trajectory lengths (10)
+    - Works well for shorter trajectory lengths (5, 9)
+    - Struggles with longer trajectory lengths (13)
         - maybe add a stopping action to allow for shorter paths?
+    - Z_0, the sum of rewards (partition function), is generally too small
+    - Maybe add backwards sampling into the training procedure to explore more states
+        - https://proceedings.mlr.press/v162/zhang22v/zhang22v.pdf
+    
     """
-    agent = GFNAgent(initial_lattice=INITIAL_LATTICE, trajectory_len=9, hidden_size = 32)
+    agent = GFNAgent(initial_lattice=INITIAL_LATTICE, trajectory_len=13, hidden_size = 32)
     agent.train_gflownet()
+    os.makedirs(f"eval_trajectories/{agent.height}x{agent.width}/length_{agent.trajectory_len}/temp_{agent.env.temp}", exist_ok=True)
     for i in range(5):
         trajectory, forward_probs, backward_probs, actions, reward = agent.sample_trajectory()
         lattices = [state[:-1].reshape((agent.height, agent.width)) for state in trajectory]
         visualize_trajectory(
             trajectory=lattices,
-            filename=f"eval_trajectories/trajectory_{i}_{agent.height}_x_{agent.width}.gif",
+            filename=f"eval_trajectories/{agent.height}x{agent.width}/length_{agent.trajectory_len}/temp_{agent.env.temp}/trajectory_{i}.gif",
             reward=reward.item(),
         )
     plt.show()

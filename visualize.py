@@ -71,7 +71,7 @@ def _draw_arrows(lattice):
     width, height = lattice.shape
     for x in range(width):
         for y in range(height):
-            if lattice[x][y] == 0:
+            if lattice[x][y] == -1:
                 plt.gca().add_patch(
                     FancyArrow(
                         y * particle_separation,
