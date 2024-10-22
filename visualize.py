@@ -1,5 +1,5 @@
 from matplotlib.lines import Line2D
-from matplotlib.patches import FancyArrow, Rectangle
+from matplotlib.patches import FancyArrow, Rectangle, Circle
 import matplotlib.pyplot as plt
 import numpy as np
 import imageio
@@ -86,7 +86,7 @@ def _draw_arrows(lattice):
                         zorder=3,
                     )
                 )
-            else:  # spin equals 1
+            elif lattice[x][y] == 1:  # spin equals 1
                 plt.gca().add_patch(
                     FancyArrow(
                         y * particle_separation,
@@ -101,7 +101,15 @@ def _draw_arrows(lattice):
                         zorder=3,
                     )
                 )
-
+            elif lattice[x][y] == 0: # void
+                plt.gca().add_patch(
+                    Circle(
+                        (y * particle_separation, (width - 1 - x) * particle_separation),
+                        .04,
+                    )
+                )
+            else:
+                 raise ValueError("Invalid value in lattice: must be equal to -1, 0, or 1.") 
 
 def draw_lattice(lattice, reward=None):
     width, height = lattice.shape[0], lattice.shape[1]
@@ -115,7 +123,7 @@ def draw_lattice(lattice, reward=None):
 
 
 def visualize_trajectory(
-    trajectory, filename="trajectory.gif", reward=None, duration=10
+    trajectory, filename="trajectory.gif", reward=None
 ):
     """
     Create a GIF from a list of states using the `visualize_state` function.
@@ -146,18 +154,21 @@ def visualize_trajectory(
         plt.close()
 
     # Save images as a GIF
-    imageio.mimsave(filename, images, fps=1)
+    imageio.mimsave(filename, images, fps=4)
 
+def visualize_terminal_state(lattice, filename):
+    plt.imsave(filename, lattice, dpi=300)
 
 if __name__ == "__main__":
     example_lattice_1 = np.array(
         [
-            [1, 0, 0, 1, 0], 
-            [1, 0, 1, 0, 1], 
-            [0, 0, 0, 0, 1],
-            [1, 1, 0, 1, 1],
-            [1, 0, 0, 1, 0]
+            [1, -1, -1, 1, -1], 
+            [1, -1, 1, -1, 1], 
+            [-1, -1, -1, -1, 1],
+            [1, 1, -1, 1, 1],
+            [1, -1, -1, 1, -1]
         ],
     )
     draw_lattice(example_lattice_1)
     plt.show()
+    visualize_terminal_state(example_lattice_1, "a")
