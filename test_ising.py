@@ -49,7 +49,7 @@ class GFlowNetVoid(nn.Module):
         return self.fwp(state), 1
 
 class GFNAgent():
-    def __init__(self, initial_lattice, trajectory_len, hidden_size, temp, batch_size, replay_batch_size = 32, buffer_size=100):
+    def __init__(self, initial_lattice, trajectory_len, hidden_size, temp, batch_size, replay_batch_size = 256, buffer_size=100000):
         super().__init__()
         self.initial_lattice = initial_lattice
         self.height = initial_lattice.shape[0]
@@ -230,7 +230,7 @@ class GFNAgent():
 
     def train_gflownet(self, num_episodes=5000):
         optimizer = optim.Adam([
-            {'params': self.model.log_Z, 'lr': 1e-1},
+            {'params': self.model.log_Z, 'lr': 1e-2},
             {'params': self.model.network.parameters(), 'lr': 1e-4},
             {'params': self.model.fwp.parameters(), 'lr': 1e-4},
             {'params': self.model.bwp.parameters(), 'lr': 1e-4},], weight_decay=5e-5)
@@ -278,9 +278,9 @@ class GFNAgent():
 if __name__ == "__main__":
     height = 9
     width = 9
-    batch_size = 8 # Adjust this value as needed
+    batch_size = 256 # Adjust this value as needed
     initial_lattice = torch.zeros((height, width))
-    agent = GFNAgent(initial_lattice=initial_lattice, trajectory_len=height*width, hidden_size=128, temp=0.01, batch_size=batch_size)
+    agent = GFNAgent(initial_lattice=initial_lattice, trajectory_len=height*width, hidden_size=256, temp=0.01, batch_size=batch_size)
     agent.train_gflownet()
     os.makedirs(f"eval_trajectories_void/{agent.height}x{agent.width}/length_{agent.trajectory_len}/temp_{agent.env.temp}", exist_ok=True)
     for i in range(5):
