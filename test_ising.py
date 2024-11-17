@@ -7,24 +7,67 @@ from tqdm import tqdm
 import os
 import random
 from collections import deque
-import numpy as np
+import heapq
 
 from test_env import IsingEnvironmentVoid
 from visualize import visualize_trajectory, visualize_terminal_state
 
-class ReplayBuffer:
-    def __init__(self, capacity):
-        self.buffer = deque(maxlen=capacity)
+class PrioritizedReplayBuffer:
+    def __init__(self, capacity, alpha, beta):
+        self.capacity = capacity
+        self.alpha = alpha
+        self.beta = beta
+        self.upper_capacity = int(self.capacity * beta)
+        self.lower_capacity = self.capacity - int(self.capacity * beta)
+        # self.buffer = deque(maxlen=capacity)
+        # self.priorities = deque(maxlen=capacity)
+        self.upper_buffer = [] # for the top alpha rewards
+        self.lower_buffer = [] # for the bottom (1-alpha) rewards
+        self.counter = 0
 
-    def push(self, trajectory, forward_probs, backward_probs, actions, log_reward):
+    def push(self, trajectory, actions, log_reward): 
         for i in range(len(trajectory[0])):
-            self.buffer.append((trajectory[:, i], forward_probs[:, i], backward_probs[:, i], actions[:, i], log_reward[i]))
+            # self.buffer.append((trajectory[:, i], actions[:, i], log_reward[i]))
+            # self.priorities.append(log_reward[i].item())
+            replay = (log_reward[i].item(),
+                      self.counter,
+                      (trajectory[:, i], actions[:, i], log_reward[i]))
+            if len(self.upper_buffer) >= self.upper_capacity:
+                popped_replay = heapq.heappushpop(self.upper_buffer, replay)
+                if len(self.lower_buffer) >= self.lower_capacity:
+                    heapq.heappushpop(self.lower_buffer, popped_replay)
+                else:
+                    heapq.heappush(self.lower_buffer, popped_replay)
+            else:
+                heapq.heappush(self.upper_buffer, replay)
+            self.counter += 1
+
+    def get_probabilities(self):
+        if len(self.priorities) == 0:
+            return None
+            
+        rewards = torch.tensor(list(self.priorities), dtype=torch.float64)
+        min_reward, max_reward = rewards.min(), rewards.max()
+        priorities = (rewards - min_reward) / (max_reward - min_reward)
+        priorities = priorities ** 2
+        probs = priorities / priorities.sum()
+        return probs
 
     def sample(self, batch_size):
-        return random.sample(self.buffer, batch_size)
+        # probs = self.get_probabilities()
+        # indices = torch.multinomial(probs, batch_size, replacement=False)
+        # samples = [self.buffer[idx.item()] for idx in indices]
+        
+        # return samples
+        upper_size = int(batch_size * self.alpha)
+        lower_size = batch_size - upper_size
+
+        upper_samples = random.choices(self.upper_buffer, k=upper_size)
+        lower_samples = random.choices(self.lower_buffer, k=lower_size)
+        return [sample[-1] for sample in upper_samples] + [sample[-1] for sample in lower_samples]
 
     def __len__(self):
-        return len(self.buffer)
+        return len(self.upper_buffer) + len(self.lower_buffer)
 
 class GFlowNetVoid(nn.Module):
     def __init__(self, initial_lattice, hidden_size):
@@ -37,32 +80,54 @@ class GFlowNetVoid(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size),
-            nn.ReLU()
+            # nn.Linear(hidden_size, hidden_size),
+            # nn.ReLU()
         )
         self.fwp = nn.Linear(hidden_size, forward_output_size)
         self.bwp = nn.Linear(hidden_size, backward_output_size)
         self.log_Z = nn.Parameter(torch.zeros(1))
 
     def forward(self, state):
+        state = state[:, :-1]
         state = self.network(state)
         return self.fwp(state), 1
 
 class GFNAgent():
-    def __init__(self, initial_lattice, trajectory_len, hidden_size, temp, batch_size, replay_batch_size = 256, buffer_size=100000):
+    def __init__(self, 
+                 initial_lattice, 
+                 trajectory_len, 
+                 hidden_size, 
+                 temp, 
+                 batch_size, 
+                 replay_batch_size, 
+                 buffer_size,
+                 alpha,
+                 beta,
+                 device):
         super().__init__()
         self.initial_lattice = initial_lattice
         self.height = initial_lattice.shape[0]
         self.width = initial_lattice.shape[1]
         self.trajectory_len = trajectory_len
+        self.sample_env = IsingEnvironmentVoid(self.initial_lattice, 
+                                               trajectory_len, 
+                                               temp, 
+                                               batch_size)
+        self.train_env = IsingEnvironmentVoid(self.initial_lattice, 
+                                              trajectory_len, 
+                                              temp, 
+                                              replay_batch_size)
+
         self.batch_size = batch_size
         self.replay_batch_size = replay_batch_size
-
-        self.env = IsingEnvironmentVoid(self.initial_lattice, trajectory_len, temp, batch_size)
-        self.train_env = IsingEnvironmentVoid(self.initial_lattice, trajectory_len, temp, replay_batch_size)
+        self.buffer_size = buffer_size
+        # Use the simplified prioritized replay buffer
+        self.replay_buffer = PrioritizedReplayBuffer(buffer_size, alpha, beta)
 
         self.model = GFlowNetVoid(self.initial_lattice, hidden_size)
-        self.replay_buffer = ReplayBuffer(buffer_size)
+        self.model.to(device)
+        self.device = device
+        self.output_folder = f"eval_trajectories_void/{self.height}x{self.width}/length_{self.trajectory_len}/temp_{self.sample_env.temp}"
 
     def create_forward_actions_mask(self, state: torch.Tensor):
         mask = (state[:, :-1] == 0).float()
@@ -75,15 +140,27 @@ class GFNAgent():
         probs = log_probs.exp()
         return probs
 
-    def sample_trajectory(self, greedy=False):
-        state = self.env.reset()
+    def create_backwards_actions_mask(self, state: torch.Tensor):
+        mask = (state[:, :-1] != 0).float()
+        return mask
+
+    def mask_and_norm_backward_actions(self, state: torch.Tensor, backward_flow: torch.Tensor):
+        mask = self.create_backwards_actions_mask(state)
+        masked_flow = torch.where(mask.bool(), backward_flow, torch.tensor(-float('inf')))
+        log_probs = F.log_softmax(masked_flow, dim=1)
+        probs = log_probs.exp()
+        return probs
+
+    def sample_trajectory(self, eps):
+        state = self.sample_env.reset()
         trajectory = [state]
         forward_probs = []
         backward_probs = []
         actions = []
         for t in range(self.trajectory_len + 1):
+            state.to(self.device)
             if t < self.trajectory_len:
-                log_forward_flow_values, log_backward_flow_values = self.model(state[:, :-1])
+                log_forward_flow_values, log_backward_flow_values = self.model(state)
                 probs = self.mask_and_norm_forward_actions(state, log_forward_flow_values)
 
                 # Debug information
@@ -95,11 +172,10 @@ class GFNAgent():
                     print(f"Weights: {self.model.fwp.weight}")
                     print(f"Backward weights: {self.model.bwp.weight}")
 
-                eps = 0.4
                 action = torch.zeros(self.batch_size, dtype=torch.long)
                 for i in range(self.batch_size):
-                    if not greedy and random.random() < eps:
-                        nonzero_indices = torch.nonzero(probs[i], as_tuple=False)
+                    if random.random() < eps:
+                        nonzero_indices = torch.nonzero(probs[i] >= 1e-8, as_tuple=False)
                         if nonzero_indices.numel() > 0:
                             action[i] = nonzero_indices[torch.randint(0, nonzero_indices.numel(), (1,))].item()
                         else:
@@ -107,7 +183,7 @@ class GFNAgent():
                     else:
                         action[i] = torch.multinomial(probs[i], 1).item()
 
-                next_state, log_reward, done = self.env.step(action)
+                next_state, log_reward, done = self.sample_env.step(action)
                 state = next_state
 
                 forward_probs.append(probs[torch.arange(self.batch_size), action])
@@ -127,34 +203,27 @@ class GFNAgent():
 
         return trajectory, forward_probs, backward_probs, actions, log_reward
 
-    def create_backwards_actions_mask(self, state: torch.Tensor):
-        mask = (state[:, :-1] != 0).float()
-        return mask
-
-    def mask_and_norm_backward_actions(self, state: torch.Tensor, backward_flow: torch.Tensor):
-        mask = self.create_backwards_actions_mask(state)
-        masked_flow = torch.where(mask.bool(), backward_flow, torch.tensor(-float('inf')))
-        log_probs = F.log_softmax(masked_flow, dim=1)
-        probs = log_probs.exp()
-        return probs
-
     def back_sample_trajectory(self):
-        state = self.env.state
-        log_reward = self.env.reward_fn(self.env.state[:, :-1].reshape(self.batch_size, self.env.initial_lattice.shape[0], -1))
+        state = self.sample_env.state
+        log_reward = self.sample_env.reward_fn(self.sample_env.state[:, :-1].reshape(self.batch_size, 
+                                                                                     self.sample_env.initial_lattice.shape[0], 
+                                                                                     -1))
         trajectory = [state]
         forward_probs = []
         backward_probs = []
         actions = []
-        for t in range(self.trajectory_len - 1):
-            log_forward_flow_values, log_backward_flow_values = self.model(state[:, :-1])
-            probs = self.mask_and_norm_backward_actions(state, log_backward_flow_values)
-            action = torch.multinomial(probs, 1).squeeze(-1)
-            next_state, _, done = self.env.reverse_step(action)
-            state = next_state
+        for t in range(self.trajectory_len):
+            state.to(self.device)
+            if t < self.trajectory_len - 1:
+                log_forward_flow_values, log_backward_flow_values = self.model(state)
+                probs = self.mask_and_norm_backward_actions(state, log_backward_flow_values)
+                action = torch.multinomial(probs, 1).squeeze(-1)
+                next_state, _, done = self.sample_env.reverse_step(action)
+                state = next_state
 
-            backward_probs.append(probs[torch.arange(self.batch_size), action])
-            actions.append(action)
-            trajectory.append(next_state)
+                backward_probs.append(probs[torch.arange(self.batch_size), action])
+                actions.append(action)
+                trajectory.append(next_state)
 
             if t >= 1:
                 prev_state = trajectory[t-1]
@@ -169,23 +238,21 @@ class GFNAgent():
 
         return trajectory, forward_probs, backward_probs, actions, log_reward
 
-    def trajectory_balance_loss(self, forward_probs: torch.Tensor, backward_probs: torch.Tensor, log_reward: torch.Tensor, step):
-        forward_log_prob = torch.sum(torch.log(torch.stack(forward_probs)), dim=0)
-        backward_log_prob = torch.sum(torch.log(torch.stack(backward_probs)), dim=0) if backward_probs else torch.zeros(self.batch_size)
-        log_ratio = self.env.beta * self.model.log_Z + forward_log_prob - log_reward - backward_log_prob
-        if step % 500 == 0:
-            print(f"log_Z: {self.model.log_Z.item()}")
-            print(f"forward_log_prob: {forward_log_prob.mean().item()}")
-            print(f"log_reward: {log_reward.mean().item()}")
-            print(f"backward_log_prob: {backward_log_prob.mean().item()}")
+    def trajectory_balance_loss(self, 
+                                forward_probs: torch.Tensor, 
+                                backward_probs: torch.Tensor, 
+                                log_reward: torch.Tensor):
+        forward_log_prob = torch.sum(torch.log(torch.clamp(torch.stack(forward_probs), min=1e-10)), dim=0)
+        backward_log_prob = torch.sum(torch.log(torch.clamp(torch.stack(backward_probs), min=1e-10)), dim=0) if backward_probs else torch.zeros(self.batch_size)
+        log_ratio = self.train_env.beta * self.model.log_Z + forward_log_prob - log_reward - backward_log_prob
         loss = log_ratio ** 2
-        return self.env.temp * loss.mean()
+        return loss.mean()
 
-    def recompute_probabilities(self, batch):
+    def compute_probabilities(self, batch):
         trajectory = []
         actions = []
         log_reward = []
-        for (traj, _, _, act, log_rew) in batch:
+        for (traj, act, log_rew) in batch:
             trajectory.append(traj)
             actions.append(act)
             log_reward.append(log_rew)
@@ -197,8 +264,9 @@ class GFNAgent():
         forward_probs = []
         backward_probs = []
         for t in range(self.trajectory_len + 1):
+            state.to(self.device)
             if t < self.trajectory_len:
-                log_forward_flow_values, log_backward_flow_values = self.model(state[:, :-1])
+                log_forward_flow_values, log_backward_flow_values = self.model(state)
                 probs = self.mask_and_norm_forward_actions(state, log_forward_flow_values)
 
                 # Debug information
@@ -209,9 +277,11 @@ class GFNAgent():
                     print(f"Probs: {probs}")
                     print(f"Weights: {self.model.fwp.weight}")
                     print(f"Backward weights: {self.model.bwp.weight}")
+                    # nans occur when a low-probability action is sampled using epsilon greedy
 
                 next_state, log_reward, done = self.train_env.step(actions[:, t])
                 state = next_state
+                assert torch.equal(state, trajectory[:, t+1])
 
                 forward_probs.append(probs[torch.arange(self.replay_batch_size), actions[:, t]])
 
@@ -228,72 +298,90 @@ class GFNAgent():
         
         return trajectory, forward_probs, backward_probs, actions, log_reward
 
-    def train_gflownet(self, num_episodes=5000):
+    def train_gflownet(self, iterations, p):
         optimizer = optim.Adam([
-            {'params': self.model.log_Z, 'lr': 1e-2},
-            {'params': self.model.network.parameters(), 'lr': 1e-4},
-            {'params': self.model.fwp.parameters(), 'lr': 1e-4},
-            {'params': self.model.bwp.parameters(), 'lr': 1e-4},], weight_decay=5e-5)
+            {'params': self.model.log_Z, 'lr': 1e-1},
+            {'params': self.model.network.parameters(), 'lr': 1e-3},
+            {'params': self.model.fwp.parameters(), 'lr': 1e-3},
+            {'params': self.model.bwp.parameters(), 'lr': 1e-3},], weight_decay=1e-5)
 
-        # Warmup scheduler (adjust the number of epochs/steps as needed)
         warmup_episodes = 1000
-        warmup_scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.1, total_iters=warmup_episodes)
+        scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, 
+                                                      start_factor=0.1, 
+                                                      total_iters=warmup_episodes)
 
-        # Cosine Annealing scheduler (adjust T_max to control the duration of cosine annealing)
-        T_max = num_episodes - warmup_episodes
-        cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max)
+        print(f"Filling replay buffer...")
+        for _ in tqdm(range(self.buffer_size // self.batch_size)):
+            trajectory, _, _, actions, log_reward = self.sample_trajectory(eps=1)
+            self.replay_buffer.push(torch.stack(trajectory), torch.stack(actions), log_reward)
 
-        # Combine warmup and cosine annealing schedulers
-        scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[warmup_scheduler, cosine_scheduler], milestones=[warmup_episodes])
+        for i in tqdm(range(iterations)):
+            # Sample new trajectories
+            for _ in range(int(p * self.buffer_size // self.batch_size)):
+                trajectory, _, _, actions, log_reward = self.sample_trajectory(eps=0.01)
+                self.replay_buffer.push(torch.stack(trajectory), torch.stack(actions), log_reward)
 
-        total_log_reward = 0
-        total_loss = 0
-        for episode in tqdm(range(num_episodes)):
-            trajectory, forward_probs, backward_probs, actions, log_reward = self.sample_trajectory()
-            total_log_reward += log_reward.mean().item()
+            # Train on batches from the replay buffer
+            total_log_reward = 0
+            total_loss = 0
+            total_episodes = 0
             
-            # Add experience to replay buffer
-            self.replay_buffer.push(torch.stack(trajectory), torch.stack(forward_probs), torch.stack(backward_probs), torch.stack(actions), log_reward)
-
-            # Train on a batch from the replay buffer
-            if len(self.replay_buffer) >= self.replay_batch_size:
+            for _ in range(8):
                 batch = self.replay_buffer.sample(self.replay_batch_size)
                 
-                # Recompute probabilities for the batch
-                traj, fwd_probs, bwd_probs, acts, log_rew = self.recompute_probabilities(batch)
+                # Compute probabilities for the batch
+                _, fwd_probs, bwd_probs, _, log_rew = self.compute_probabilities(batch)
                 
                 optimizer.zero_grad()
-                loss = self.trajectory_balance_loss(fwd_probs, bwd_probs, log_rew, episode)
+                loss = self.trajectory_balance_loss(fwd_probs, bwd_probs, log_rew)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 optimizer.step()
                 scheduler.step()
-                total_loss += loss.item()
 
-            if (episode + 1) % 1000 == 0:
-                print(f"Episode {episode + 1}, Avg loss: {total_loss / 1000}, Avg log reward: {total_log_reward / 1000}")
-                total_log_reward = 0
-                total_loss = 0
+                total_log_reward += log_rew.mean().item()
+                total_loss += loss.item()
+                total_episodes += 1
+
+            if i % 40 == 0:
+                trajectory, _, _, actions, _ = self.sample_trajectory(eps=0)
+                lattices = [state[:, :-1].reshape((self.batch_size, self.height, self.width)) for state in trajectory]
+                visualize_terminal_state(
+                    lattice=lattices[-1][0],
+                    filename=os.path.join(self.output_folder, f"training_trajectory_{i}.png")
+                )
+            # print(f"Avg loss: {total_loss / total_episodes}, Avg log reward: {total_log_reward / total_episodes}")
 
 if __name__ == "__main__":
-    height = 9
-    width = 9
-    batch_size = 256 # Adjust this value as needed
+    height = 7
+    width = 7
     initial_lattice = torch.zeros((height, width))
-    agent = GFNAgent(initial_lattice=initial_lattice, trajectory_len=height*width, hidden_size=256, temp=0.01, batch_size=batch_size)
-    agent.train_gflownet()
-    os.makedirs(f"eval_trajectories_void/{agent.height}x{agent.width}/length_{agent.trajectory_len}/temp_{agent.env.temp}", exist_ok=True)
-    for i in range(5):
-        trajectory, forward_probs, backward_probs, actions, reward = agent.sample_trajectory(greedy=True)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    agent = GFNAgent(initial_lattice=initial_lattice, 
+                     trajectory_len=height*width, 
+                     hidden_size=256, 
+                     temp=3, 
+                     batch_size=256, 
+                     replay_batch_size=256, 
+                     buffer_size=100_000,
+                     alpha=0.5,
+                     beta=0.1,
+                     device=device)
+    os.makedirs(agent.output_folder, exist_ok=True)
+    agent.train_gflownet(iterations=300, p=0.005)
+
+    for i in range(20):
+        trajectory, forward_probs, backward_probs, actions, reward = agent.sample_trajectory(eps=0)
         lattices = [state[:, :-1].reshape((agent.batch_size, agent.height, agent.width)) for state in trajectory]
-        visualize_trajectory(
-            trajectory=[lattice[0] for lattice in lattices],  # Visualize only the first batch item
-            filename=f"eval_trajectories_void/{agent.height}x{agent.width}/length_{agent.trajectory_len}/temp_{agent.env.temp}/trajectory_{i}.gif",
-            reward=reward[0].item(),
-        )
+        # visualize_trajectory(
+        #     trajectory=[lattice[0] for lattice in lattices],  # Visualize only the first batch item
+        #     filename=os.path.join(agent.output_folder, f"trajectory_{i}.gif"),
+        #     reward=reward[0].item()
+        # )
         visualize_terminal_state(
-            lattice=lattices[-1][0],  # Visualize only the first batch item
-            filename=f"eval_trajectories_void/{agent.height}x{agent.width}/length_{agent.trajectory_len}/temp_{agent.env.temp}/trajectory_{i}.png"
+            lattice=lattices[-1][0],  # Visualize the terminal state of the first batch item
+            filename=os.path.join(agent.output_folder, f"trajectory_{i}.png")
         )
     plt.show()
     print("Done")

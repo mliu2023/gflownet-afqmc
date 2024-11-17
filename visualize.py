@@ -157,7 +157,7 @@ def visualize_trajectory(
     imageio.mimsave(filename, images, fps=4)
 
 def visualize_terminal_state(lattice, filename):
-    plt.imsave(filename, lattice, dpi=300)
+    plt.imsave(filename, lattice, cmap='viridis', vmin=-1, vmax=1)
 
 if __name__ == "__main__":
     example_lattice_1 = np.array(

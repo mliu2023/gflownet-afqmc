@@ -266,8 +266,8 @@ class GFNAgent():
                 total_loss = 0
 
 if __name__ == "__main__":
-    height = 9
-    width = 9
+    height = 3
+    width = 3
     initial_lattice = torch.zeros((height, width))
     agent = GFNAgent(initial_lattice=initial_lattice, trajectory_len=height*width, hidden_size = 128, temp=0.1)
     agent.train_gflownet()
