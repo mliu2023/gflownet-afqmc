@@ -3,33 +3,59 @@ import torch.optim as optim
 import torch.nn.functional as F
 
 from tqdm import tqdm
+import random
+import os
 
 from abc import ABC, abstractmethod
 
+from visualize import visualize_terminal_state
+from prioritized_replay_buffer import PrioritizedReplayBuffer
+
 class GFNAgent(ABC):
 
-    def __init__(self, initial_lattice, trajectory_len, hidden_size, temp):
-        """
-        Initialize the GFlowNet agent.
-
-        Args:
-            max_trajectory_len (int): Max length for each sampled path
-            n_hidden (int): Number of nodes in hidden layer of neural network
-            epochs (int): Number of epochs to complete during training cycle
-            lr (float): Learning rate
-        """
+    def __init__(self, 
+                 initial_lattice, 
+                 trajectory_len, 
+                 hidden_size, 
+                 temp, 
+                 batch_size, 
+                 replay_batch_size, 
+                 buffer_size,
+                 alpha,
+                 beta,
+                 device):
         super().__init__()
         self.initial_lattice = initial_lattice  # all trajectories will start from this lattice
         self.height = initial_lattice.shape[0]
         self.width = initial_lattice.shape[1]
         self.trajectory_len = trajectory_len
 
-        self.env = self.get_environment(self.initial_lattice, trajectory_len, temp)
+        self.sample_env = self.get_environment(self.initial_lattice, 
+                                               trajectory_len, 
+                                               temp, 
+                                               batch_size)
+        self.train_env = self.get_environment(self.initial_lattice, 
+                                              trajectory_len, 
+                                              temp, 
+                                              replay_batch_size)
+
+        self.batch_size = batch_size
+        self.replay_batch_size = replay_batch_size
+        self.buffer_size = buffer_size
+        # Use the simplified prioritized replay buffer
+        self.replay_buffer = PrioritizedReplayBuffer(buffer_size, alpha, beta)
 
         self.model = self.get_gflownet(self.initial_lattice, hidden_size)
+        self.model.to(device)
+        self.device = device
+        self.output_folder = f"eval_trajectories_{self.get_env_name()}/{self.height}x{self.width}/length_{self.trajectory_len}/temp_{self.sample_env.temp}"
     
     @abstractmethod
-    def get_environment(self, initial_lattice, trajectory_len, temp):
+    def get_env_name(self):
+        pass
+    
+    @abstractmethod
+    def get_environment(self, initial_lattice, trajectory_len, temp, batch_size):
         pass
 
     @abstractmethod
@@ -56,9 +82,10 @@ class GFNAgent(ABC):
             (torch.Tensor): Masked and normalized probabilities
         """
         mask = self.create_forward_actions_mask(state)
-        masked_actions = mask * forward_flow
-        normalized_actions = masked_actions / (masked_actions.sum(axis=0, keepdims=True) + 1e-10)
-        return normalized_actions
+        masked_flow = torch.where(mask.bool(), forward_flow, torch.tensor(-float('inf')))
+        log_probs = F.log_softmax(masked_flow, dim=1)
+        probs = log_probs.exp()
+        return probs
 
     def mask_and_norm_backward_actions(self, state: torch.Tensor, backward_flow: torch.Tensor):
         """
@@ -72,134 +99,211 @@ class GFNAgent(ABC):
             (torch.Tensor): Masked and normalized probabilities
         """
         mask = self.create_backwards_actions_mask(state)
-        masked_actions = mask * backward_flow
-        normalized_actions = masked_actions / (masked_actions.sum(axis=0, keepdims=True) + 1e-10)
-        return normalized_actions
+        masked_flow = torch.where(mask.bool(), backward_flow, torch.tensor(-float('inf')))
+        log_probs = F.log_softmax(masked_flow, dim=1)
+        probs = log_probs.exp()
+        return probs
 
-    def sample_trajectory(self):
-        """
-        Sample a trajectory using the current policy.
-
-        Returns:
-            (torch.Tensor, torch.Tensor, torch.Tensor): (trajectory, forward probs, actions, rewards)
-        """
-        state = self.env.reset()
+    def sample_trajectory(self, eps):
+        state = self.sample_env.reset()
         trajectory = [state]
         forward_probs = []
         backward_probs = []
         actions = []
-        for t in range(self.trajectory_len):
-            log_forward_flow_values, log_backward_flow_values = self.model(state[:-1])
-            probs = self.mask_and_norm_forward_actions(state, F.softmax(log_forward_flow_values, dim=0))
-            action = torch.multinomial(probs, 1).item()
-            next_state, log_reward, done = self.env.step(action)
-            state = next_state
+        for t in range(self.trajectory_len + 1):
+            state.to(self.device)
+            if t < self.trajectory_len:
+                log_forward_flow_values, log_backward_flow_values = self.model(state)
+                probs = self.mask_and_norm_forward_actions(state, log_forward_flow_values)
 
-            forward_probs.append(probs[action])
-            actions.append(action)
-            trajectory.append(next_state)
+                # Debug information
+                if torch.isnan(probs).any() or torch.isinf(probs).any() or (probs < 0).any():
+                    print(f"Invalid probabilities at step {t}")
+                    print(f"Forward flow values: {log_forward_flow_values}")
+                    print(f"Backward flow values: {log_backward_flow_values}")
+                    print(f"Probs: {probs}")
+                    print(f"Weights: {self.model.fwp.weight}")
+                    print(f"Backward weights: {self.model.bwp.weight}")
+
+                action = torch.zeros(self.batch_size, dtype=torch.long)
+                for i in range(self.batch_size):
+                    if random.random() < eps:
+                        nonzero_indices = torch.nonzero(probs[i] >= 1e-8, as_tuple=False)
+                        if nonzero_indices.numel() > 0:
+                            action[i] = nonzero_indices[torch.randint(0, nonzero_indices.numel(), (1,))].item()
+                        else:
+                            raise Exception(f"No valid actions for batch item {i}")
+                    else:
+                        action[i] = torch.multinomial(probs[i], 1).item()
+
+                next_state, log_reward, done = self.sample_env.step(action)
+                state = next_state
+
+                forward_probs.append(probs[torch.arange(self.batch_size), action])
+                actions.append(action)
+                trajectory.append(next_state)
 
             if t >= 1:
                 prev_state = trajectory[t-1]
                 curr_state = trajectory[t]
-                diff = (curr_state - prev_state)[:-1]
-                back_action = diff.abs().argmax()
-                prev_probs = self.mask_and_norm_backward_actions(state, F.softmax(log_backward_flow_values, dim=0))
-                backward_probs.append(prev_probs[back_action])
+                diff = (curr_state - prev_state)[:, :-1]
+                back_action = diff.abs().argmax(dim=1)
+                prev_probs = self.mask_and_norm_backward_actions(state, log_backward_flow_values)
+                backward_probs.append(prev_probs[torch.arange(self.batch_size), back_action])
 
-            if done:
+            if done.all():
                 break
 
         return trajectory, forward_probs, backward_probs, actions, log_reward
 
     def back_sample_trajectory(self):
-        """
-        Follow current backward policy from a position back to the origin.
-        Returns them in "forward order" such that origin is first.
-
-        Args:
-            lattice (torch.Tensor): starting lattice for the back trajectory
-        
-        Returns:
-            (torch.Tensor, torch.Tensor): (positions, actions)
-        """
-        # Attempt to trace a path back to the origin from a given position
-        state = self.env.state
-        log_reward = self.env.reward_fn(self.env.state[:-1].reshape(self.env.initial_lattice.shape))
+        state = self.sample_env.state
+        log_reward = self.sample_env.reward_fn(self.sample_env.state[:, :-1].reshape(self.batch_size, 
+                                                                                     self.sample_env.initial_lattice.shape[0], 
+                                                                                     -1))
         trajectory = [state]
         forward_probs = []
         backward_probs = []
         actions = []
-        for t in range(self.trajectory_len - 1):
-            log_forward_flow_values, log_backward_flow_values = self.model(state[:-1])
-            probs = self.mask_and_norm_backward_actions(state, F.softmax(log_backward_flow_values, dim=0))
-            action = torch.multinomial(probs, 1)
-            next_state, _, done = self.env.reverse_step(action)
-            state = next_state
+        for t in range(self.trajectory_len):
+            state.to(self.device)
+            if t < self.trajectory_len - 1:
+                log_forward_flow_values, log_backward_flow_values = self.model(state)
+                probs = self.mask_and_norm_backward_actions(state, log_backward_flow_values)
+                action = torch.multinomial(probs, 1).squeeze(-1)
+                next_state, _, done = self.sample_env.reverse_step(action)
+                state = next_state
 
-            backward_probs.append(probs[action])
-            actions.append(action)
-            trajectory.append(next_state)
+                backward_probs.append(probs[torch.arange(self.batch_size), action])
+                actions.append(action)
+                trajectory.append(next_state)
 
             if t >= 1:
                 prev_state = trajectory[t-1]
                 curr_state = trajectory[t]
-                diff = (curr_state - prev_state)[:-1]
-                prev_action = diff.abs().argmax()
-                prev_probs = self.mask_and_norm_forward_actions(state, F.softmax(log_forward_flow_values, dim=0))
-                forward_probs.append(prev_probs[prev_action])
+                diff = (curr_state - prev_state)[:, :-1]
+                prev_action = diff.abs().argmax(dim=1)
+                prev_probs = self.mask_and_norm_forward_actions(state, log_forward_flow_values)
+                forward_probs.append(prev_probs[torch.arange(self.batch_size), prev_action])
 
-            if done:
+            if done.all():
                 break
 
         return trajectory, forward_probs, backward_probs, actions, log_reward
 
-    def trajectory_balance_loss(self, forward_probs: torch.Tensor, backward_probs: torch.Tensor, log_reward: torch.Tensor):
+    def compute_probabilities(self, batch):
+        trajectory = []
+        actions = []
+        log_reward = []
+        for (traj, act, log_rew) in batch:
+            trajectory.append(traj)
+            actions.append(act)
+            log_reward.append(log_rew)
+        trajectory = torch.stack(trajectory)
+        actions = torch.stack(actions)
+        log_reward = torch.stack(log_reward)
+            
+        state = self.train_env.reset()
+        forward_probs = []
+        backward_probs = []
+        for t in range(self.trajectory_len + 1):
+            state.to(self.device)
+            if t < self.trajectory_len:
+                log_forward_flow_values, log_backward_flow_values = self.model(state)
+                probs = self.mask_and_norm_forward_actions(state, log_forward_flow_values)
+
+                # Debug information
+                if torch.isnan(probs).any() or torch.isinf(probs).any() or (probs < 0).any():
+                    print(f"Invalid probabilities at step {t}")
+                    print(f"Forward flow values: {log_forward_flow_values}")
+                    print(f"Backward flow values: {log_backward_flow_values}")
+                    print(f"Probs: {probs}")
+                    print(f"Weights: {self.model.fwp.weight}")
+                    print(f"Backward weights: {self.model.bwp.weight}")
+                    # nans occur when a low-probability action is sampled using epsilon greedy
+
+                next_state, log_reward, done = self.train_env.step(actions[:, t])
+                state = next_state
+                assert torch.equal(state, trajectory[:, t+1])
+
+                forward_probs.append(probs[torch.arange(self.replay_batch_size), actions[:, t]])
+
+            if t >= 1:
+                prev_state = trajectory[:, t-1]
+                curr_state = trajectory[:, t]
+                diff = (curr_state - prev_state)[:, :-1]
+                back_action = diff.abs().argmax(dim=1)
+                prev_probs = self.mask_and_norm_backward_actions(state, log_backward_flow_values)
+                backward_probs.append(prev_probs[torch.arange(self.replay_batch_size), back_action])
+
+            if done.all():
+                break
+        
+        return trajectory, forward_probs, backward_probs, actions, log_reward
+    
+    def trajectory_balance_loss(self, 
+                                forward_probs: torch.Tensor, 
+                                backward_probs: torch.Tensor, 
+                                log_reward: torch.Tensor):
         """
         Calculate Trajectory Balance Loss function as described in https://arxiv.org/abs/2201.13259.
         """
-        forward_log_prob = torch.sum(torch.log(torch.stack(forward_probs)))
-        backward_log_prob = torch.sum(torch.log(torch.stack(backward_probs))) if backward_probs else torch.tensor(0.0)
-        log_ratio = self.model.log_Z + forward_log_prob - log_reward - backward_log_prob
+        forward_log_prob = torch.sum(torch.log(torch.clamp(torch.stack(forward_probs), min=1e-10)), dim=0)
+        backward_log_prob = torch.sum(torch.log(torch.clamp(torch.stack(backward_probs), min=1e-10)), dim=0) if backward_probs else torch.zeros(self.batch_size)
+        log_ratio = self.train_env.beta * self.model.log_Z + forward_log_prob - log_reward - backward_log_prob
         loss = log_ratio ** 2
-        return loss
+        return loss.mean()
 
-    def train_gflownet(self, num_episodes=10000, batch_size = 1):
+    def train_gflownet(self, iterations, p):
         optimizer = optim.Adam([
-            {'params': self.model.log_Z, 'lr': 3e-2},
+            {'params': self.model.log_Z, 'lr': 1e-1},
             {'params': self.model.network.parameters(), 'lr': 1e-3},
             {'params': self.model.fwp.parameters(), 'lr': 1e-3},
-            {'params': self.model.bwp.parameters(), 'lr': 1e-3},], weight_decay=5e-5)
-        # scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_episodes)
-        # scheduler = optim.lr_scheduler.LinearLR(optimizer, total_iters=10000)
+            {'params': self.model.bwp.parameters(), 'lr': 1e-3},], weight_decay=1e-5)
 
-        total_log_reward = 0
-        total_loss = 0
-        for episode in tqdm(range(num_episodes)):
-            losses = []
-            log_rewards = []
-            for _ in range(batch_size):
-                trajectory_1, forward_probs_1, backward_probs_1, actions_1, log_reward_1 = self.sample_trajectory()
-                # trajectory_2, forward_probs_2, backward_probs_2, actions_2, log_reward_2 = self.back_sample_trajectory()
+        warmup_episodes = 1000
+        scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, 
+                                                      start_factor=0.1, 
+                                                      total_iters=warmup_episodes)
+
+        print(f"Filling replay buffer...")
+        for _ in tqdm(range(self.buffer_size // self.batch_size)):
+            trajectory, _, _, actions, log_reward = self.sample_trajectory(eps=1)
+            self.replay_buffer.push(torch.stack(trajectory), torch.stack(actions), log_reward)
+
+        for i in tqdm(range(iterations)):
+            # Sample new trajectories
+            for _ in range(int(p * self.buffer_size // self.batch_size)):
+                trajectory, _, _, actions, log_reward = self.sample_trajectory(eps=0.01)
+                self.replay_buffer.push(torch.stack(trajectory), torch.stack(actions), log_reward)
+
+            # Train on batches from the replay buffer
+            total_log_reward = 0
+            total_loss = 0
+            total_episodes = 0
+            
+            for _ in range(8):
+                batch = self.replay_buffer.sample(self.replay_batch_size)
                 
-                loss_forward = self.trajectory_balance_loss(forward_probs_1, backward_probs_1, log_reward_1)
-                # loss_backward = self.trajectory_balance_loss(forward_probs_2, backward_probs_2, log_reward_2)
-                # loss = (loss_forward + loss_backward) / 2
-                losses.append(loss_forward)
-                log_rewards.append(log_reward_1)
-            loss = torch.stack(losses).mean()
-            log_reward = torch.stack(log_rewards).mean()
+                # Compute probabilities for the batch
+                _, fwd_probs, bwd_probs, _, log_rew = self.compute_probabilities(batch)
+                
+                optimizer.zero_grad()
+                loss = self.trajectory_balance_loss(fwd_probs, bwd_probs, log_rew)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                optimizer.step()
+                scheduler.step()
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            # scheduler.step()
+                total_log_reward += log_rew.mean().item()
+                total_loss += loss.item()
+                total_episodes += 1
 
-            total_log_reward += log_reward.item()
-            total_loss += loss.item()
-
-            if (episode + 1) % (num_episodes // 10) == 0:
-                print(self.model.log_Z)
-                print(f"Episode {episode + 1}, Avg loss: {total_loss / (num_episodes // 10)}, Avg forward log(reward): {total_log_reward / (num_episodes // 10)}, LR: {optimizer.param_groups[0]['lr']:.6f}")
-                total_log_reward = 0
-                total_loss = 0
+            if i % 40 == 0:
+                trajectory, _, _, actions, _ = self.sample_trajectory(eps=0)
+                lattices = [state[:, :-1].reshape((self.batch_size, self.height, self.width)) for state in trajectory]
+                visualize_terminal_state(
+                    lattice=lattices[-1][0],
+                    filename=os.path.join(self.output_folder, f"training_trajectory_{i}.png")
+                )
+            # print(f"Avg loss: {total_loss / total_episodes}, Avg log reward: {total_log_reward / total_episodes}")

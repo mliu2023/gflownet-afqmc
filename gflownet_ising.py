@@ -12,14 +12,6 @@ from visualize import visualize_trajectory, visualize_terminal_state
 
 INITIAL_LATTICE = random_tensor = 2 * torch.bernoulli(torch.full((7, 7), 0.5)) - 1
 
-# INITIAL_LATTICE = torch.Tensor(
-#     [
-#         [-1, 1, 1],
-#         [1, -1, 1],
-#         [1, 1, -1]
-#     ]
-# )
-
 class GFlowNet(nn.Module):
     def __init__(self, initial_lattice, hidden_size):
         super(GFlowNet, self).__init__()
@@ -30,8 +22,8 @@ class GFlowNet(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size),
-            nn.ReLU(),
+            # nn.Linear(hidden_size, hidden_size),
+            # nn.ReLU(),
         )
         self.fwp = nn.Linear(hidden_size, output_size)
         self.bwp = nn.Linear(hidden_size, output_size)
@@ -39,9 +31,8 @@ class GFlowNet(nn.Module):
 
     def forward(self, state):
         state = self.network(state)
-        # return F.softplus(self.fwp(state)), F.softplus(self.bwp(state))
-        # return self.fwp(state).exp(), self.bwp(state).exp()
-        return self.fwp(state), torch.Tensor([1.0])
+        # return self.fwp(state), self.bwp(state)
+        return self.fwp(state), 1
 
 
 """
