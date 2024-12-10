@@ -159,6 +159,11 @@ def visualize_trajectory(
 def visualize_terminal_state(lattice, filename):
     plt.imsave(filename, lattice, cmap='viridis', vmin=-1, vmax=1)
 
+def visualize_reward_distribution(rewards, filename):
+    plt.hist(rewards, bins=25)
+    plt.savefig(filename)
+    plt.close()
+
 if __name__ == "__main__":
     example_lattice_1 = np.array(
         [

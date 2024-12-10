@@ -49,12 +49,16 @@ class PrioritizedReplayBuffer:
         # samples = [self.buffer[idx.item()] for idx in indices]
         
         # return samples
-        upper_size = int(batch_size * self.alpha)
-        lower_size = batch_size - upper_size
+        if batch_size <= len(self.upper_buffer):
+            samples = random.choices(self.upper_buffer, k=batch_size)
+            return [sample[-1] for sample in samples]
+        else:
+            upper_size = int(batch_size * self.alpha)
+            lower_size = batch_size - upper_size
 
-        upper_samples = random.choices(self.upper_buffer, k=upper_size)
-        lower_samples = random.choices(self.lower_buffer, k=lower_size)
-        return [sample[-1] for sample in upper_samples] + [sample[-1] for sample in lower_samples]
+            upper_samples = random.choices(self.upper_buffer, k=upper_size)
+            lower_samples = random.choices(self.lower_buffer, k=lower_size)
+            return [sample[-1] for sample in upper_samples] + [sample[-1] for sample in lower_samples]
 
     def __len__(self):
         return len(self.upper_buffer) + len(self.lower_buffer)
