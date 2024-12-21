@@ -110,13 +110,10 @@ class GFNAgentIsing(ABC):
 
     def get_action(self, probs: torch.Tensor, eps: float):
         action = torch.zeros(self.batch_size, dtype=torch.long)
+        nonzero_indices = torch.nonzero(probs >= 1e-10, as_tuple=False)
         for i in range(self.batch_size):
             if random.random() < eps:
-                nonzero_indices = torch.nonzero(probs[i] >= 1e-10, as_tuple=False)
-                if nonzero_indices.numel() > 0:
-                    action[i] = nonzero_indices[torch.randint(0, nonzero_indices.numel(), (1,))].item()
-                else:
-                    raise Exception(f"No valid actions for batch item {i}")
+                action[i] = nonzero_indices[i][torch.randint(0, nonzero_indices[i].numel(), (1,))].item()
             else:
                 action[i] = torch.multinomial(probs[i], 1).item()
         return action
