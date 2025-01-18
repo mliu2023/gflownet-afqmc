@@ -8,7 +8,7 @@ from tqdm import tqdm
 import os
 
 from environments.ising_env import IsingEnvironment
-from visualize import visualize_trajectory, visualize_terminal_state
+from utils.visualize import visualize_trajectory, visualize_terminal_state
 
 INITIAL_LATTICE = random_tensor = 2 * torch.bernoulli(torch.full((7, 7), 0.5)) - 1
 

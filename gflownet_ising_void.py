@@ -5,7 +5,7 @@ from tqdm import tqdm
 
 from gflownet_ising import GFNAgentIsing
 from environments.ising_void_env import IsingEnvironmentVoid
-from visualize import visualize_trajectory, visualize_terminal_state, visualize_reward_distribution
+from utils.visualize import visualize_trajectory, visualize_terminal_state, visualize_reward_distribution
 
 class GFlowNetIsingVoid(nn.Module):
     def __init__(self, initial_lattice, hidden_size):
@@ -31,9 +31,6 @@ class GFlowNetIsingVoid(nn.Module):
         return self.fwp(state), 1
 
 class GFNAgentIsingVoid(GFNAgentIsing):
-    def get_env_name(self):
-        return "void_2"
-    
     def get_environment(self, initial_lattice, trajectory_len, temp, batch_size):
         return IsingEnvironmentVoid(initial_lattice, trajectory_len, temp, batch_size)
 

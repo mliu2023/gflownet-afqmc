@@ -5,7 +5,7 @@ from tqdm import tqdm
 
 from gflownet_ising import GFNAgentIsing
 from environments.ising_env import IsingEnvironment
-from visualize import visualize_trajectory, visualize_terminal_state, visualize_reward_distribution
+from utils.visualize import visualize_trajectory, visualize_terminal_state, visualize_reward_distribution
 
 class GFlowNetIsingInit(nn.Module):
     def __init__(self, initial_lattice, hidden_size):

@@ -7,8 +7,8 @@ import os
 
 from abc import ABC, abstractmethod
 
-from visualize import visualize_terminal_state
-from prioritized_replay_buffer import PrioritizedReplayBuffer
+from utils.visualize import visualize_terminal_state
+from utils.prioritized_replay_buffer import PrioritizedReplayBuffer
 
 class GFNAgentIsing(ABC):
 

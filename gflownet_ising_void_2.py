@@ -8,8 +8,8 @@ import os
 import random
 
 from environments.ising_void_env import IsingEnvironmentVoid
-from visualize import visualize_trajectory, visualize_terminal_state, visualize_reward_distribution
-from prioritized_replay_buffer import PrioritizedReplayBuffer
+from utils.visualize import visualize_trajectory, visualize_terminal_state, visualize_reward_distribution
+from utils.prioritized_replay_buffer import PrioritizedReplayBuffer
 
 class GFlowNetVoid(nn.Module):
     def __init__(self, initial_lattice, hidden_size):
@@ -68,7 +68,7 @@ class GFNAgentVoid():
         self.model = GFlowNetVoid(self.initial_lattice, hidden_size)
         self.model.to(device)
         self.device = device
-        self.output_folder = f"eval_trajectories_void_3/{self.height}x{self.width}/length_{self.trajectory_len}/temp_{self.sample_env.temp}"
+        self.output_folder = f"trajectories/ising_void_3/{self.height}x{self.width}/length_{self.trajectory_len}/temp_{self.sample_env.temp}"
 
     def create_forward_actions_mask(self, state: torch.Tensor):
         mask = (state[:, :-1] == 0).float()
