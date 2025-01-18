@@ -3,7 +3,6 @@ import torch.optim as optim
 import torch.nn.functional as F
 
 from tqdm import tqdm
-import random
 import os
 
 from abc import ABC, abstractmethod
@@ -23,6 +22,7 @@ class GFNAgentIsing(ABC):
                  buffer_size,
                  alpha,
                  beta,
+                 env_folder,
                  device):
         super().__init__()
         self.initial_lattice = initial_lattice
@@ -46,14 +46,11 @@ class GFNAgentIsing(ABC):
         self.model = self.get_gflownet(self.initial_lattice, hidden_size)
         self.model.to(device)
         self.device = device
-        self.output_folder = f"ising_{self.get_env_name()}/" \
+        self.output_folder = "trajectories/" \
+                             f"{env_folder}/" \
                              f"{self.height}x{self.width}/" \
                              f"length_{self.trajectory_len}/" \
                              f"temp_{self.sample_env.temp}"
-
-    @abstractmethod
-    def get_env_name(self):
-        pass
     
     @abstractmethod
     def get_environment(self, initial_lattice: torch.Tensor, 
@@ -108,21 +105,32 @@ class GFNAgentIsing(ABC):
         probs = log_probs.exp()
         return probs
 
+    # def get_action(self, probs: torch.Tensor, eps: float):
+    #     action = torch.zeros(self.batch_size, dtype=torch.long)
+    #     nonzero_indices = torch.nonzero(probs >= 1e-10, as_tuple=False)
+    #     for i in range(self.batch_size):
+    #         if random.random() < eps:
+    #             action[i] = nonzero_indices[i][torch.randint(0, nonzero_indices[i].numel(), (1,))].item()
+    #         else:
+    #             action[i] = torch.multinomial(probs[i], 1).item()
+    #     return action
     def get_action(self, probs: torch.Tensor, eps: float):
-        action = torch.zeros(self.batch_size, dtype=torch.long)
-        nonzero_indices = torch.nonzero(probs >= 1e-10, as_tuple=False)
-        for i in range(self.batch_size):
-            if random.random() < eps:
-                action[i] = nonzero_indices[i][torch.randint(0, nonzero_indices[i].numel(), (1,))].item()
-            else:
-                action[i] = torch.multinomial(probs[i], 1).item()
-        return action
+        batch_size = probs.shape[0]
+
+        rand_vals = torch.rand(batch_size, 1)
+        random_mask = rand_vals < eps
+
+        uniform_actions = torch.multinomial((probs > 1e-10).float(), 1)
+        probabilistic_actions = torch.multinomial(probs, 1)
+
+        actions = torch.where(random_mask, uniform_actions, probabilistic_actions)
+        return actions.squeeze(1)
 
     def sample_trajectory(self, eps: float):
         """
         Samples trajectories using the training policy. 
-        The training policy uses the network 1-epsilon of 
-        the time and samples uniformly epsilon of the time.
+        The training policy uses the learned policy 1-epsilon 
+        of the time and samples uniformly epsilon of the time.
         """
         state = self.sample_env.reset()
         trajectory = [state]

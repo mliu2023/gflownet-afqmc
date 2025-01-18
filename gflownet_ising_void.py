@@ -4,7 +4,7 @@ import os
 from tqdm import tqdm
 
 from gflownet_ising import GFNAgentIsing
-from env_void import IsingEnvironmentVoid
+from environments.ising_void_env import IsingEnvironmentVoid
 from visualize import visualize_trajectory, visualize_terminal_state, visualize_reward_distribution
 
 class GFlowNetIsingVoid(nn.Module):
@@ -110,6 +110,7 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     for temp in [0.1, 0.3, 1, 3, 10]:
+    # for temp in [0.1]:
         agent = GFNAgentIsingVoid(initial_lattice=initial_lattice, 
                         trajectory_len=height*width, 
                         hidden_size=256, 
@@ -119,9 +120,10 @@ if __name__ == "__main__":
                         buffer_size=100_000,
                         alpha=0.5,
                         beta=0.1,
+                        env_folder="ising_void_2",
                         device=device)
         os.makedirs(agent.output_folder, exist_ok=True)
-        agent.train_gflownet(iterations=300, steps_per_iteration=8, resamples_per_iteration=1)
+        agent.train_gflownet(iterations=400, steps_per_iteration=8, resamples_per_iteration=1)
 
         rewards = []
         for i in range(20):

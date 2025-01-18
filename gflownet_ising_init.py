@@ -4,7 +4,7 @@ import os
 from tqdm import tqdm
 
 from gflownet_ising import GFNAgentIsing
-from env import IsingEnvironment
+from environments.ising_env import IsingEnvironment
 from visualize import visualize_trajectory, visualize_terminal_state, visualize_reward_distribution
 
 class GFlowNetIsingInit(nn.Module):
@@ -31,9 +31,6 @@ class GFlowNetIsingInit(nn.Module):
         return self.fwp(state), 1
     
 class GFNAgentIsingInit(GFNAgentIsing):
-    def get_env_name(self):
-        return "init"
-
     def get_environment(self, initial_lattice, trajectory_len, temp, batch_size):
         return IsingEnvironment(initial_lattice, trajectory_len, temp, batch_size)
     
@@ -67,7 +64,7 @@ class GFNAgentIsingInit(GFNAgentIsing):
         #         mask[i] = (diff[i] != 0).float()
         # return mask
     
-    def train_gflownet(self, iterations, steps_per_iteration, p):
+    def train_gflownet(self, iterations, steps_per_iteration, resamples_per_iteration):
         optimizer = torch.optim.Adam([
             {'params': self.model.log_Z, 'lr': 1e-1},
             {'params': self.model.network.parameters(), 'lr': 1e-3},
@@ -87,7 +84,7 @@ class GFNAgentIsingInit(GFNAgentIsing):
 
         for i in tqdm(range(iterations)):
             # Sample new trajectories
-            for _ in range(int(p * self.buffer_size // self.batch_size)):
+            for _ in range(resamples_per_iteration):
                 trajectory, _, _, actions, log_reward = self.sample_trajectory(eps=0.01)
                 self.replay_buffer.push(torch.stack(trajectory), torch.stack(actions), log_reward)
 
@@ -128,33 +125,36 @@ if __name__ == "__main__":
     initial_lattice = random_tensor = 2 * torch.bernoulli(torch.full((height, width), 0.5)) - 1
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    agent = GFNAgentIsingInit(initial_lattice=initial_lattice, 
-                         trajectory_len=height*width, 
-                         hidden_size=256, 
-                         temp=.1, 
-                         batch_size=256, 
-                         replay_batch_size=256, 
-                         buffer_size=100_000,
-                         alpha=0.5,
-                         beta=0.1,
-                         device=device)
-    os.makedirs(agent.output_folder, exist_ok=True)
-    agent.train_gflownet(iterations=300, steps_per_iteration=8, p=0.005)
+    # for temp in [0.1, 0.3, 1, 3, 10]:
+    for temp in [0.1]:
+        agent = GFNAgentIsingInit(initial_lattice=initial_lattice, 
+                                  trajectory_len=height*width, 
+                                  hidden_size=256, 
+                                  temp=temp, 
+                                  batch_size=256, 
+                                  replay_batch_size=256, 
+                                  buffer_size=100_000,
+                                  alpha=0.5,
+                                  beta=0.1,
+                                  env_folder="ising_init",
+                                  device=device)
+        os.makedirs(agent.output_folder, exist_ok=True)
+        agent.train_gflownet(iterations=400, steps_per_iteration=8, resamples_per_iteration=1)
 
-    rewards = []
-    for i in range(20):
-        trajectory, forward_probs, backward_probs, actions, reward = agent.sample_trajectory(eps=0)
-        lattices = [state[:, :-1].reshape((agent.batch_size, agent.height, agent.width)) for state in trajectory]
-        # visualize_trajectory(
-        #     trajectory=[lattice[0] for lattice in lattices],  # Visualize only the first batch item
-        #     filename=os.path.join(agent.output_folder, f"trajectory_{i}.gif"),
-        #     reward=reward[0].item()
-        # )
-        visualize_terminal_state(
-            lattice=lattices[-1][0],  # Visualize the terminal state of the first batch item
-            filename=os.path.join(agent.output_folder, f"trajectory_{i}.png")
-        )
-        rewards.append(reward)
-    rewards = torch.stack(rewards).flatten().numpy()
-    visualize_reward_distribution(rewards, os.path.join(agent.output_folder, "rewards.png"))
-    print("Done")
+        rewards = []
+        for i in range(20):
+            trajectory, forward_probs, backward_probs, actions, reward = agent.sample_trajectory(eps=0)
+            lattices = [state[:, :-1].reshape((agent.batch_size, agent.height, agent.width)) for state in trajectory]
+            # visualize_trajectory(
+            #     trajectory=[lattice[0] for lattice in lattices],  # Visualize only the first batch item
+            #     filename=os.path.join(agent.output_folder, f"trajectory_{i}.gif"),
+            #     reward=reward[0].item()
+            # )
+            visualize_terminal_state(
+                lattice=lattices[-1][0],  # Visualize the terminal state of the first batch item
+                filename=os.path.join(agent.output_folder, f"trajectory_{i}.png")
+            )
+            rewards.append(reward)
+        rewards = torch.stack(rewards).flatten().numpy()
+        visualize_reward_distribution(rewards, os.path.join(agent.output_folder, "rewards.png"))
+        print("Done")

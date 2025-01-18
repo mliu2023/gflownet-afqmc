@@ -71,7 +71,7 @@ def _draw_arrows(lattice):
     width, height = lattice.shape
     for x in range(width):
         for y in range(height):
-            if lattice[x][y] == -1:
+            if lattice[x][y] == -1: # spin equals -1
                 plt.gca().add_patch(
                     FancyArrow(
                         y * particle_separation,
@@ -86,7 +86,7 @@ def _draw_arrows(lattice):
                         zorder=3,
                     )
                 )
-            elif lattice[x][y] == 1:  # spin equals 1
+            elif lattice[x][y] == 1: # spin equals 1
                 plt.gca().add_patch(
                     FancyArrow(
                         y * particle_separation,
@@ -111,7 +111,7 @@ def _draw_arrows(lattice):
             else:
                  raise ValueError("Invalid value in lattice: must be equal to -1, 0, or 1.") 
 
-def draw_lattice(lattice, reward=None):
+def _draw_lattice(lattice, reward=None):
     width, height = lattice.shape[0], lattice.shape[1]
     _base_lattice(lattice_width=width, lattice_height=height)
     _draw_arrows(lattice)
@@ -137,11 +137,11 @@ def visualize_trajectory(
     for index, state in enumerate(trajectory):
         # Visualize the state using your existing function
         if index == last_index:
-            draw_lattice(state, reward=reward)
+            _draw_lattice(state, reward=reward)
         elif index == 0:
-            draw_lattice(state, reward="starting")
+            _draw_lattice(state, reward="starting")
         else:
-            draw_lattice(state, reward="intermediate")
+            _draw_lattice(state, reward="intermediate")
 
         # Save the plot to a PNG buffer
         buffer = io.BytesIO()
@@ -174,6 +174,6 @@ if __name__ == "__main__":
             [1, -1, -1, 1, -1]
         ],
     )
-    draw_lattice(example_lattice_1)
+    _draw_lattice(example_lattice_1)
     plt.show()
-    visualize_terminal_state(example_lattice_1, "a")
+    visualize_terminal_state(example_lattice_1, "example_lattice_1.png")

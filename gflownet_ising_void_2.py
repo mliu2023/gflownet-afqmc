@@ -7,7 +7,7 @@ from tqdm import tqdm
 import os
 import random
 
-from env_void import IsingEnvironmentVoid
+from environments.ising_void_env import IsingEnvironmentVoid
 from visualize import visualize_trajectory, visualize_terminal_state, visualize_reward_distribution
 from prioritized_replay_buffer import PrioritizedReplayBuffer
 
@@ -305,17 +305,18 @@ if __name__ == "__main__":
     initial_lattice = torch.zeros((height, width))
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    for temp in [0.1, 0.3, 1, 3, 10]:
+    # for temp in [0.1, 0.3, 1, 3, 10]:
+    for temp in [0.1]:
         agent = GFNAgentVoid(initial_lattice=initial_lattice, 
-                        trajectory_len=height*width, 
-                        hidden_size=256, 
-                        temp=temp, 
-                        batch_size=16, 
-                        replay_batch_size=16, 
-                        buffer_size=100_000,
-                        alpha=0.5,
-                        beta=0.1,
-                        device=device)
+                             trajectory_len=height*width, 
+                             hidden_size=256, 
+                             temp=temp, 
+                             batch_size=16, 
+                             replay_batch_size=16, 
+                             buffer_size=100_000,
+                             alpha=0.5,
+                             beta=0.1,
+                             device=device)
         os.makedirs(agent.output_folder, exist_ok=True)
         agent.train_gflownet(iterations=5000)
 
