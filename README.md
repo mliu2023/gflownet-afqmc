@@ -1,5 +1,7 @@
-# GFlowNets for sampling trajectories on the Ising model
+# GFlowNets for sampling auxiliary fields in quantum systems
 
-This project aims to accelerate Quantum Monte Carlo algorithms by using a generative flow network (GFlowNet). As a proof-of-concept, we generate trajectories on the Ising model. Each trajectory consists of a sequence of states, each differing from the previous state by one spin. The GFlowNet is trained to sample paths proportional to the energies of their terminal states; this allows the network to more efficiently find reward modes (low energy states) than other RL or MCMC methods.
+This project aims to use reinforcement learning to learn a distribution of discrete auxiliary fields from a relatively small number of samples. We view these fields as discrete trajectories from an initial state to a terminal state. The initial state is a blank slate where every spin is unspecified, and the terminal state is a fully specified spin configuration. From one state to the next, an unspecified spin is set to +1 or -1. 
 
-![](https://github.com/mliu2023/gflownet-ising/blob/main/eval_trajectories/trajectory_0_3_x_3.gif)
+We use generative flow networks (GFlowNets) to sample these trajectories because we believe they are better suited to learn high-dimensional distributions. We concurrently train an energy model to learn the energy of each terminal state, and the reward of each terminal state is computed as the exponential of minus energy.
+
+The GFlowNet is trained using a flow-matching objective to sample paths proportional to the rewards of the terminal states; this allows it to find reward modes (low-energy states) more efficiently than other RL or MCMC methods.
