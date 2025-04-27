@@ -159,8 +159,29 @@ def visualize_trajectory(
 def visualize_terminal_state(lattice, filename):
     plt.imsave(filename, lattice, cmap='viridis', vmin=-1, vmax=1)
 
+def visualize_terminal_states(lattices, filename, cols):
+    num_lattices = len(lattices)
+    rows = (num_lattices + cols - 1) // cols
+    
+    fig, axes = plt.subplots(rows, cols, figsize=(cols, rows))
+    axes = np.array(axes).reshape(rows, cols)
+    
+    for i, ax in enumerate(axes.flat):
+        if i < num_lattices:
+            ax.imshow(lattices[i], cmap='viridis', vmin=-1, vmax=1)
+        ax.axis('off')  # Hide axes
+
+    plt.tight_layout()
+    plt.savefig(filename, dpi=300)
+    plt.close(fig)
+
 def visualize_reward_distribution(rewards, filename):
-    plt.hist(rewards, bins=25)
+    plt.hist(rewards, bins=20)
+    plt.savefig(filename)
+    plt.close()
+
+def visualize_parity_plot(energies, energies_pred, filename):
+    plt.scatter(energies, energies_pred)
     plt.savefig(filename)
     plt.close()
 

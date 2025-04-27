@@ -1,3 +1,9 @@
 .DS_Store
 __pycache__
 trajectories
+data
+unused
+script
+energies*
+fields*
+script.py
