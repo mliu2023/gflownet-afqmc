@@ -5,3 +5,8 @@ This project aims to use reinforcement learning to learn a distribution of discr
 We use generative flow networks (GFlowNets) to sample these trajectories because we believe they are better suited to learn high-dimensional distributions. We concurrently train an energy model to learn the energy of each terminal state, and the reward of each terminal state is computed as the exponential of minus energy.
 
 The GFlowNet is trained using a flow-matching objective to sample paths proportional to the rewards of the terminal states; this allows it to find reward modes (low-energy states) more efficiently than other RL or MCMC methods.
+
+## Running the code
+```
+python -m af.gflownet_af_void
+```
