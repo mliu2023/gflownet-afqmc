@@ -8,5 +8,5 @@ The GFlowNet is trained using a flow-matching objective to sample paths proporti
 
 ## Running the code
 ```
-python -m af.gflownet_af_void
+python gflownet_af_void.py
 ```
