@@ -175,8 +175,8 @@ def visualize_terminal_states(lattices, filename, cols):
     plt.savefig(filename, dpi=300)
     plt.close(fig)
 
-def visualize_reward_distribution(rewards, filename):
-    plt.hist(rewards, bins=20)
+def visualize_distribution(values, filename):
+    plt.hist(values, bins=20)
     plt.savefig(filename)
     plt.close()
 

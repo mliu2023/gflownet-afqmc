@@ -3,16 +3,16 @@ import torch.nn as nn
 import numpy as np
 import os
 
-from af.gflownet_af import GFNAgentAF
+from gflownet_af import GFNAgentAF
 from environments.af_env import AFEnvironment
 from utils.visualize import (visualize_terminal_states, 
-                             visualize_reward_distribution,
+                             visualize_distribution,
                              visualize_parity_plot)
+
 class EnergyModel(nn.Module):
     def __init__(self, n_fields, hidden_size):
         super().__init__()
         self.n_fields = n_fields
-        # self.J = nn.Parameter(torch.normal(0, 1, (n_fields, n_fields)))
         input_size = n_fields
         self.network = nn.Sequential(
             nn.Linear(input_size, hidden_size),
@@ -24,7 +24,6 @@ class EnergyModel(nn.Module):
             nn.Linear(hidden_size, 1)
         )
     def forward(self, x):
-        # return -torch.einsum('bi,ij,bj->b', x, self.J, x)
         return self.network(x)
 
 class GFlowNetAFVoid(nn.Module):
@@ -48,7 +47,7 @@ class GFlowNetAFVoid(nn.Module):
     def forward(self, state):
         state = state[:, :-1]
         state = self.network(state)
-        return self.fwp(state), torch.ones(state.shape[0], 1)
+        return self.fwp(state), torch.ones(state.shape[0], 1) # uniform backward policy
         # return self.fwp(state), self.bwp(state)
 
 class GFNAgentAFVoid(GFNAgentAF):
@@ -59,14 +58,6 @@ class GFNAgentAFVoid(GFNAgentAF):
         return GFlowNetAFVoid(n_fields, hidden_size)
     
     def get_energy_model(self, n_fields, hidden_size):
-        # return nn.Sequential(
-        #     nn.Linear(n_fields, hidden_size),
-        #     nn.ReLU(),
-        #     nn.Linear(hidden_size, hidden_size),
-        #     nn.ReLU(),
-        #     nn.Linear(hidden_size, 1),
-        #     # nn.ELU(),
-        # )
         return EnergyModel(n_fields, hidden_size)
 
     def create_forward_actions_mask(self, state: torch.Tensor):
@@ -102,29 +93,19 @@ if __name__ == "__main__":
                            fields=fields,
                            energies=energies)
     os.makedirs(agent.output_folder, exist_ok=True)
-    agent.train_gflownet(iterations=2000) # 500 iterations is good
+    agent.train_gflownet(iterations=5000, warmup_k=5000)
 
     log_rewards = []
     for i in range(20):
         trajectory, forward_probs, backward_probs, actions, log_reward = agent.forward_sample_trajectory(eps=0, K=agent.trajectory_len)
-        # sampled_fields = [state[:, :-1].reshape((agent.batch_size, height, width)) for state in trajectory]
-        # visualize_trajectory(
-        #     trajectory=[lattice[0] for lattice in lattices],  # Visualize only the first batch item
-        #     filename=os.path.join(agent.output_folder, f"trajectory_{i}.gif"),
-        #     reward=reward[0].item()
-        # )
-        # visualize_terminal_state(
-        #     lattice=fields[-1][0],  # Visualize the terminal state of the first batch item
-        #     filename=os.path.join(agent.output_folder, f"trajectory_{i}.png")
-        # )
         log_rewards.append(log_reward)
     log_rewards = torch.stack(log_rewards).detach().flatten().numpy()
-    visualize_reward_distribution(-log_rewards, os.path.join(agent.output_folder, "energies.png"))
+    visualize_distribution(-log_rewards, os.path.join(agent.output_folder, "energies.png"))
     
     trajectory, forward_probs, backward_probs, actions, log_reward = agent.forward_sample_trajectory(eps=0, K=agent.trajectory_len)
     sampled_fields = [state[:, :-1].reshape((agent.batch_size, height, width)) for state in trajectory]
     visualize_terminal_states(
-        lattices=sampled_fields[-1],  # Visualize the terminal states
+        lattices=sampled_fields[-1],
         filename=os.path.join(agent.output_folder, f"fields.png"),
         cols=16
     )

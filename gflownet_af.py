@@ -1,12 +1,7 @@
 import torch
 import torch.nn.functional as F
-
 from tqdm import tqdm
-import os
-
 from abc import ABC, abstractmethod
-
-from utils.visualize import visualize_terminal_states
 
 class GFNAgentAF(ABC):
 
@@ -88,8 +83,10 @@ class GFNAgentAF(ABC):
         """
         mask = self.create_forward_actions_mask(state)
         masked_flow = torch.where(mask.bool(), forward_flow, torch.tensor(-float('inf')))
-        log_probs = F.log_softmax(masked_flow, dim=1)
-        probs = log_probs.exp()
+        # log_probs = F.log_softmax(masked_flow, dim=1)
+        # probs = log_probs.exp()
+        # return probs
+        probs = F.softmax(masked_flow, dim=1)
         return probs
 
     def mask_and_norm_backward_actions(self, state: torch.Tensor, backward_flow: torch.Tensor):
@@ -105,8 +102,10 @@ class GFNAgentAF(ABC):
         """
         mask = self.create_backwards_actions_mask(state)
         masked_flow = torch.where(mask.bool(), backward_flow, torch.tensor(-float('inf')))
-        log_probs = F.log_softmax(masked_flow, dim=1)
-        probs = log_probs.exp()
+        # log_probs = F.log_softmax(masked_flow, dim=1)
+        # probs = log_probs.exp()
+        # return probs
+        probs = F.softmax(masked_flow, dim=1)
         return probs
 
     def get_action(self, probs: torch.Tensor, eps: float):
@@ -339,9 +338,9 @@ class GFNAgentAF(ABC):
         # ebm_scheduler.step()
         return loss
 
-    def train_gflownet(self, iterations):
+    def train_gflownet(self, iterations, warmup_k):
         gflownet_optimizer = torch.optim.Adam([
-            {'params': self.policy_model.log_Z, 'lr': 1.0},
+            {'params': self.policy_model.log_Z, 'lr': 1e-1},
             {'params': self.policy_model.network.parameters(), 'lr': 1e-3},
             {'params': self.policy_model.fwp.parameters(), 'lr': 1e-3},
             {'params': self.policy_model.bwp.parameters(), 'lr': 1e-3},])
@@ -350,30 +349,31 @@ class GFNAgentAF(ABC):
         ebm_optimizer = torch.optim.Adam(self.energy_model.parameters(), lr=1e-4)
         ebm_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(ebm_optimizer, T_max=1000)
 
-        training_lattices = []
+        # training_lattices = []
 
         tqdm_bar = tqdm(range(iterations))
         for i in tqdm_bar:
-            _, fwd_probs, bwd_probs, _, log_rew = self.forward_sample_trajectory(eps=1e-2, K=self.trajectory_len)
+            _, fwd_probs, bwd_probs, _, log_rew = self.forward_sample_trajectory(eps=1e-2, K=self.trajectory_len) # .08
             
             gflownet_optimizer.zero_grad()
             loss = self.trajectory_balance_loss(fwd_probs, bwd_probs, log_rew)
-            loss.backward()
+            loss.backward() # time: .037
             torch.nn.utils.clip_grad_norm_(self.policy_model.parameters(), max_norm=1.0)
             gflownet_optimizer.step()
             # gflownet_scheduler.step()
 
-            ebm_loss = self.update_ebm(ebm_optimizer, ebm_scheduler, K = min(self.n_fields, 1+int(2 * i / iterations * (self.n_fields - 1))))
+            ebm_loss = self.update_ebm(ebm_optimizer, ebm_scheduler, K = min(self.n_fields, 1+int(i / warmup_k * self.n_fields))) # .007
+            ebm_loss = self.update_ebm(ebm_optimizer, ebm_scheduler, K = min(self.n_fields, 1+int(i / warmup_k * self.n_fields))) # .007
 
-            trajectory, _, _, _, _ = self.forward_sample_trajectory(eps=0, K=self.trajectory_len)
+            trajectory, _, _, _, _ = self.forward_sample_trajectory(eps=0, K=self.trajectory_len) # .08
             fields = [state[:, :-1].reshape((self.batch_size, self.nx, self.ny)) for state in trajectory]
-            training_lattices.append(fields[-1][0])
+            # training_lattices.append(fields[-1][0])
 
             tqdm_bar.set_postfix(gflownet_loss=f"{loss:.4f}", ebm_loss=f"{ebm_loss:.4f}", energy=f"{-log_rew.mean():.4f}")
             if i % 100 == 0:
-                print(f"Gflownet loss: {loss}, EBM loss: {ebm_loss}, Avg energy: {-log_rew.mean()}")
-        visualize_terminal_states(
-            lattices=training_lattices,
-            filename=os.path.join(self.output_folder, f"training_fields.png"),
-            cols=16
-        )
+                print(f"EBM loss: {ebm_loss:.4f}, Gflownet loss: {loss:.4f}, Avg energy: {-log_rew.mean():.4f}")
+        # visualize_terminal_states(
+        #     lattices=training_lattices,
+        #     filename=os.path.join(self.output_folder, f"training_fields.png"),
+        #     cols=16
+        # )
