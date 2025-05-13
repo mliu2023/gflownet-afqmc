@@ -5,6 +5,7 @@ import numpy as np
 import imageio
 from PIL import Image
 import io
+from sklearn.metrics import r2_score
 
 x1 = 0.35
 x2 = 0.65
@@ -169,7 +170,7 @@ def visualize_terminal_states(lattices, filename, cols):
     for i, ax in enumerate(axes.flat):
         if i < num_lattices:
             ax.imshow(lattices[i], cmap='viridis', vmin=-1, vmax=1)
-        ax.axis('off')  # Hide axes
+        ax.axis('off')
 
     plt.tight_layout()
     plt.savefig(filename, dpi=300)
@@ -182,19 +183,8 @@ def visualize_distribution(values, filename):
 
 def visualize_parity_plot(energies, energies_pred, filename):
     plt.scatter(energies, energies_pred)
+    plt.plot(energies, np.poly1d(np.polyfit(energies, energies_pred, 1))(energies))
+    r_squared = r2_score(energies_pred, energies)
+    plt.title(f"r^2 = {r_squared:.3f}")
     plt.savefig(filename)
     plt.close()
-
-if __name__ == "__main__":
-    example_lattice_1 = np.array(
-        [
-            [1, -1, -1, 1, -1], 
-            [1, -1, 1, -1, 1], 
-            [-1, -1, -1, -1, 1],
-            [1, 1, -1, 1, 1],
-            [1, -1, -1, 1, -1]
-        ],
-    )
-    _draw_lattice(example_lattice_1)
-    plt.show()
-    visualize_terminal_state(example_lattice_1, "example_lattice_1.png")

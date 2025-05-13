@@ -3,7 +3,7 @@ import torch.nn as nn
 import numpy as np
 import os
 
-from gflownet_af import GFNAgentAF
+from gflownet_afqmc import GFNAgentAF
 from environments.af_env import AFEnvironment
 from utils.visualize import (visualize_terminal_states, 
                              visualize_distribution,
@@ -71,21 +71,21 @@ class GFNAgentAFVoid(GFNAgentAF):
 if __name__ == "__main__":
     torch.manual_seed(1)
 
-    height = 7
-    width = 7
-    n_fields = 49
-    fields = torch.from_numpy(np.load("data/af_7x7_24up_24down_fields.npy"))
+    height = 5
+    width = 5
+    n_fields = 25
+    fields = torch.from_numpy(np.load("data/af_5x5_12up_12down_fields.npy"))
     fields = 2 * fields - 1
     fields = fields.to(torch.float32)
-    energies = torch.from_numpy(np.load("data/af_7x7_24up_24down_energies.npy"))
+    energies = torch.from_numpy(np.load("data/af_5x5_12up_12down_energies.npy"))
     energies = energies.to(torch.float32)
 
     device = torch.device("cpu")
 
     agent = GFNAgentAFVoid(n_fields=n_fields,
                            trajectory_len=n_fields,
-                           nx=7,
-                           ny=7,
+                           nx=5,
+                           ny=5,
                            hidden_size=256, 
                            batch_size=256, 
                            env_folder="af_void",
@@ -93,7 +93,7 @@ if __name__ == "__main__":
                            fields=fields,
                            energies=energies)
     os.makedirs(agent.output_folder, exist_ok=True)
-    agent.train_gflownet(iterations=5000, warmup_k=5000)
+    agent.train_gflownet(iterations=1000, warmup_k=1000)
 
     log_rewards = []
     for i in range(20):
@@ -112,6 +112,6 @@ if __name__ == "__main__":
     energies_pred = []
     for field in fields:
         energies_pred.append(agent.energy_model(field))
-    energies_pred = torch.stack(energies_pred).detach().numpy()
+    energies_pred = torch.stack(energies_pred).flatten().detach().numpy()
     visualize_parity_plot(energies, energies_pred, os.path.join(agent.output_folder, f"parity_plot.png"))
     print("Done")

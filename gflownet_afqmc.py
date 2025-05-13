@@ -233,6 +233,7 @@ class GFNAgentAF(ABC):
 
         return trajectory, forward_probs, backward_probs, actions, log_reward
 
+    # useful if using a replay buffer
     def compute_probabilities(self, batch: list[tuple], K: int):
         trajectory = torch.empty((self.batch_size, K+1, self.n_fields+1))
         actions = torch.empty((self.batch_size, K))
@@ -301,7 +302,6 @@ class GFNAgentAF(ABC):
 
     def update_ebm(self, 
                    optimizer: torch.optim.Optimizer, 
-                   ebm_scheduler: torch.optim.lr_scheduler,
                    K: int):
         indices = torch.randint(0, len(self.fields), (self.batch_size,))
         fields = self.fields[indices]
@@ -335,7 +335,6 @@ class GFNAgentAF(ABC):
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.energy_model.parameters(), max_norm=1.0)
         optimizer.step()
-        # ebm_scheduler.step()
         return loss
 
     def train_gflownet(self, iterations, warmup_k):
@@ -344,28 +343,24 @@ class GFNAgentAF(ABC):
             {'params': self.policy_model.network.parameters(), 'lr': 1e-3},
             {'params': self.policy_model.fwp.parameters(), 'lr': 1e-3},
             {'params': self.policy_model.bwp.parameters(), 'lr': 1e-3},])
-        gflownet_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(gflownet_optimizer, T_max=1000)
 
         ebm_optimizer = torch.optim.Adam(self.energy_model.parameters(), lr=1e-4)
-        ebm_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(ebm_optimizer, T_max=1000)
 
         # training_lattices = []
 
         tqdm_bar = tqdm(range(iterations))
         for i in tqdm_bar:
-            _, fwd_probs, bwd_probs, _, log_rew = self.forward_sample_trajectory(eps=1e-2, K=self.trajectory_len) # .08
+            _, fwd_probs, bwd_probs, _, log_rew = self.forward_sample_trajectory(eps=1e-2, K=self.trajectory_len)
             
             gflownet_optimizer.zero_grad()
             loss = self.trajectory_balance_loss(fwd_probs, bwd_probs, log_rew)
-            loss.backward() # time: .037
+            loss.backward()
             torch.nn.utils.clip_grad_norm_(self.policy_model.parameters(), max_norm=1.0)
             gflownet_optimizer.step()
-            # gflownet_scheduler.step()
 
-            ebm_loss = self.update_ebm(ebm_optimizer, ebm_scheduler, K = min(self.n_fields, 1+int(i / warmup_k * self.n_fields))) # .007
-            ebm_loss = self.update_ebm(ebm_optimizer, ebm_scheduler, K = min(self.n_fields, 1+int(i / warmup_k * self.n_fields))) # .007
+            ebm_loss = self.update_ebm(ebm_optimizer, K = min(self.n_fields, 1+int(i / warmup_k * self.n_fields)))
 
-            trajectory, _, _, _, _ = self.forward_sample_trajectory(eps=0, K=self.trajectory_len) # .08
+            trajectory, _, _, _, _ = self.forward_sample_trajectory(eps=0, K=self.trajectory_len)
             fields = [state[:, :-1].reshape((self.batch_size, self.nx, self.ny)) for state in trajectory]
             # training_lattices.append(fields[-1][0])
 
