@@ -4,7 +4,7 @@ import numpy as np
 import os
 
 from gflownet_afqmc import GFNAgentAF
-from environments.af_env import AFEnvironment
+from environments.afqmc_env import AFEnvironment
 from utils.visualize import (visualize_terminal_states, 
                              visualize_distribution,
                              visualize_parity_plot)
@@ -88,7 +88,7 @@ if __name__ == "__main__":
                            ny=5,
                            hidden_size=256, 
                            batch_size=256, 
-                           env_folder="af_void",
+                           env_folder="afqmc_void",
                            device=device,
                            fields=fields,
                            energies=energies)

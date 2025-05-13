@@ -7,6 +7,11 @@ We use generative flow networks (GFlowNets) to sample these trajectories because
 The GFlowNet is trained using a flow-matching objective to sample paths proportional to the rewards of the terminal states; this allows it to find reward modes (low-energy states) more efficiently than other RL or MCMC methods.
 
 ## Running the code
+To jointly train the GFlowNet and energy model, run
 ```
 python gflownet_afqmc_void.py
+```
+To directly train the energy model on the energy data, run
+```
+python train_energy_model.py
 ```
